@@ -1,29 +1,36 @@
-# Core frameworks and utilities
+# ───────────────────────────
+#  Core framework & helpers
+# ───────────────────────────
 streamlit==1.28.0
 requests==2.31.0
 python-dotenv==1.0.0
 
-# Data processing and scientific computing
-numpy==1.26.2
+# ───────────────────────────
+#  Data / numerics
+# ───────────────────────────
+numpy==1.26.2          # manylinux wheel → works on Py 3.12
 pandas==2.1.4
 
-# Visualization
+# ───────────────────────────
+#  Plotting / visuals
+# ───────────────────────────
 matplotlib==3.8.1
 pillow==10.1.0
+altair==5.1.2           # used by Streamlit for charts
 
-# Bioinformatics
+# ───────────────────────────
+#  Bio‑tooling
+# ───────────────────────────
 biopython==1.83
+dna-features-viewer==3.1.1
+primer3-py==2.1.0
 
-# For compatibility with Python 3.11
+#  pydna → **latest stable that supports Py 3.12**
+pydna==4.0.7            # ← do NOT change to 4.1.0 (doesn't exist!)
+
+# ───────────────────────────
+#  Misc compatibility pins
+# ───────────────────────────
 pytz==2023.3.post1
 typing-extensions==4.8.0
-altair==5.1.2
 
-# For DNA visualization and manipulation
-dna_features_viewer==3.1.1
-
-# For sequence manipulation
-pydna==4.1.0
-# Updated on Thu Apr 17 04:31:37 EDT 2025
-# Updated on Thu Apr 17 16:08:02 EDT 2025
-# Updated on Thu Apr 17 16:10:25 EDT 2025

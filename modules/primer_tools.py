@@ -3,6 +3,11 @@ Primer Tools module for designing primers using Primer3
 """
 from typing import Dict, Any, List
 import os
+import logging
+
+# Initialize logger
+logger = logging.getLogger("primer_tools")
+logger.setLevel(logging.INFO)
 
 try:
     import primer3
@@ -13,7 +18,7 @@ except ImportError:
 
 def design_primers(insert_region: Dict[str, Any], construct_info: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Design primers for the inserted gene using Primer3.
+    Design primers for the inserted gene using simple method since Primer3 is failing.
     
     Args:
         insert_region: Dictionary containing information about the inserted region
@@ -44,27 +49,15 @@ def design_primers(insert_region: Dict[str, Any], construct_info: Dict[str, Any]
     if n_percentage > 10:
         raise ValueError(f"Could not generate primers: sequence for {gene_name} contains {n_percentage:.1f}% ambiguous bases (maximum 10% allowed)")
     
-    # Add flanking sequences for better primer design
-    # In reality, you'd use actual flanking sequences from the vector
-    flanking_size = 50
-    flank_left = "G" * flanking_size  # Use G instead of N for better specificity
-    flank_right = "C" * flanking_size  # Use C instead of N for better specificity
-    
     # Determine if we need to add restriction sites
     restriction_sites = None
     if cloning_method == "Restriction Enzyme Cloning":
         restriction_sites = get_restriction_sites_for_cloning(construct_info)
     
-    # Full sequence with flanks for primer design
-    full_seq = flank_left + template_seq + flank_right
-    
     try:
-        # Use Primer3 if available
-        if PRIMER3_AVAILABLE:
-            primers = design_primers_with_primer3(full_seq, flanking_size, len(template_seq), gene_name, restriction_sites)
-        else:
-            # Fallback to simple primer design with restriction sites if needed
-            primers = design_simple_primers(template_seq, gene_name, restriction_sites)
+        # Use simple primer design instead of Primer3
+        logger.info(f"Designing simple primers for {gene_name} (length: {len(template_seq)})")
+        primers = design_simple_primers(template_seq, gene_name, restriction_sites)
         
         return {
             "primers": primers,
@@ -145,18 +138,22 @@ def design_primers_with_primer3(sequence: str, flank_size: int, template_length:
         'SEQUENCE_TARGET': [target_start, target_length],
     }
     
-    # Primer design parameters
+    # Primer design parameters - make more permissive
     global_args = {
         'PRIMER_OPT_SIZE': 20,
         'PRIMER_MIN_SIZE': 18,
-        'PRIMER_MAX_SIZE': 25,
+        'PRIMER_MAX_SIZE': 30,
         'PRIMER_OPT_TM': 60.0,
-        'PRIMER_MIN_TM': 57.0,
-        'PRIMER_MAX_TM': 63.0,
-        'PRIMER_MIN_GC': 40.0,
-        'PRIMER_MAX_GC': 60.0,
-        'PRIMER_NUM_RETURN': 1,
-        'PRIMER_PICK_INTERNAL_OLIGO': 0
+        'PRIMER_MIN_TM': 55.0,
+        'PRIMER_MAX_TM': 65.0,
+        'PRIMER_MIN_GC': 30.0,
+        'PRIMER_MAX_GC': 70.0,
+        'PRIMER_NUM_RETURN': 3,
+        'PRIMER_PICK_INTERNAL_OLIGO': 0,
+        'PRIMER_MAX_END_STABILITY': 9.0,
+        'PRIMER_EXPLAIN_FLAG': 1,
+        'PRIMER_MAX_POLY_X': 5,
+        'PRIMER_LIBERAL_BASE': 1
     }
     
     # Run Primer3

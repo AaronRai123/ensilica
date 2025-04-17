@@ -362,7 +362,224 @@ class ConstructBuilder:
         if n_percentage > 10:
             raise ValueError(f"Invalid sequence for {sequence_id}: contains {n_percentage:.1f}% ambiguous bases (maximum 10% allowed)")
         
+        # Smart sequence validation
+        validation_results = self.smart_sequence_validation(record)
+        
+        # Log the validation results
+        for key, result in validation_results.items():
+            if not result["valid"]:
+                logger.warning(f"Sequence {sequence_id} validation issue: {result['message']}")
+        
         logger.info(f"Validated sequence for {sequence_id}: {len(record.seq)} bp, {n_percentage:.1f}% ambiguous bases")
+    
+    def smart_sequence_validation(self, record: SeqRecord) -> Dict[str, Any]:
+        """
+        Perform smart sequence validation checks on a SeqRecord
+        
+        Args:
+            record: SeqRecord object to validate
+            
+        Returns:
+            Dictionary with validation results for different aspects
+        """
+        results = {
+            "frame_shift": {"valid": True, "message": ""},
+            "promoter_orientation": {"valid": True, "message": ""},
+            "rbs_presence": {"valid": True, "message": ""},
+            "restriction_sites": {"valid": True, "message": "", "conflicting_sites": []}
+        }
+        
+        seq_str = str(record.seq).upper()
+        
+        # 1. Check for frame shift (start/stop codon)
+        results["frame_shift"] = self._check_frame_shift(record)
+        
+        # 2. Check promoter orientation
+        results["promoter_orientation"] = self._check_promoter_orientation(record)
+        
+        # 3. Check for RBS presence before CDS
+        results["rbs_presence"] = self._check_rbs_presence(record)
+        
+        # 4. Check for internal restriction sites that conflict with common cloning enzymes
+        results["restriction_sites"] = self._check_restriction_sites(record)
+        
+        return results
+        
+    def _check_frame_shift(self, record: SeqRecord) -> Dict[str, Any]:
+        """Check for proper reading frame with start/stop codons"""
+        result = {"valid": True, "message": ""}
+        seq_str = str(record.seq).upper()
+        
+        # Look for CDS features first
+        cds_features = [f for f in record.features if f.type == "CDS"]
+        
+        if cds_features:
+            for i, feature in enumerate(cds_features):
+                # Extract the feature sequence
+                feature_seq = feature.extract(record.seq)
+                feature_str = str(feature_seq).upper()
+                
+                # Check for start codon
+                if not feature_str.startswith('ATG'):
+                    result["valid"] = False
+                    result["message"] += f"CDS #{i+1} does not start with ATG. "
+                
+                # Check for in-frame stop codon
+                has_stop = False
+                for j in range(0, len(feature_str) - 2, 3):
+                    codon = feature_str[j:j+3]
+                    if codon in ['TAA', 'TAG', 'TGA']:
+                        if j == len(feature_str) - 3:  # Last codon
+                            has_stop = True
+                        else:
+                            result["valid"] = False
+                            result["message"] += f"CDS #{i+1} has premature stop codon at position {j}. "
+                
+                if not has_stop:
+                    result["valid"] = False
+                    result["message"] += f"CDS #{i+1} has no stop codon. "
+        else:
+            # If no CDS features, do a basic check on the whole sequence
+            has_start = 'ATG' in seq_str
+            has_stop = any(stop in seq_str for stop in ['TAA', 'TAG', 'TGA'])
+            
+            if not has_start:
+                result["valid"] = False
+                result["message"] += "No start codon (ATG) found. "
+            
+            if not has_stop:
+                result["valid"] = False
+                result["message"] += "No stop codon (TAA/TAG/TGA) found. "
+        
+        return result
+    
+    def _check_promoter_orientation(self, record: SeqRecord) -> Dict[str, Any]:
+        """Check for proper promoter orientation relative to CDS"""
+        result = {"valid": True, "message": ""}
+        
+        promoter_features = [f for f in record.features if f.type == "promoter"]
+        cds_features = [f for f in record.features if f.type == "CDS"]
+        
+        if promoter_features and cds_features:
+            for promoter in promoter_features:
+                promoter_end = promoter.location.end
+                
+                # Find CDS features that should be downstream of this promoter
+                for i, cds in enumerate(cds_features):
+                    cds_start = cds.location.start
+                    
+                    # If the CDS is on reverse strand but promoter isn't, or vice versa
+                    if promoter.strand != cds.strand:
+                        result["valid"] = False
+                        result["message"] += f"Promoter and CDS #{i+1} have incompatible orientations (different strands). "
+                    
+                    # Check if the promoter is upstream of the CDS (within reasonable distance)
+                    if promoter.strand == 1:  # Forward strand
+                        if not (promoter_end <= cds_start and cds_start - promoter_end < 500):
+                            result["valid"] = False
+                            result["message"] += f"Promoter not properly positioned upstream of CDS #{i+1}. "
+                    else:  # Reverse strand
+                        if not (cds_start <= promoter_end and promoter_end - cds_start < 500):
+                            result["valid"] = False
+                            result["message"] += f"Promoter not properly positioned upstream of CDS #{i+1} on reverse strand. "
+        
+        return result
+    
+    def _check_rbs_presence(self, record: SeqRecord) -> Dict[str, Any]:
+        """Check for RBS presence before CDS"""
+        result = {"valid": True, "message": ""}
+        
+        cds_features = [f for f in record.features if f.type == "CDS"]
+        rbs_features = [f for f in record.features if f.type in ["RBS", "ribosome_binding_site"]]
+        
+        # Common RBS consensus sequences to check for
+        rbs_consensus = ["AGGAGG", "GGAGG", "AGGAG", "GGAG", "GAGG", "AGGA", "AAGG"]
+        
+        if cds_features:
+            for i, cds in enumerate(cds_features):
+                has_rbs = False
+                
+                # First check if there's an RBS feature associated with this CDS
+                for rbs in rbs_features:
+                    if cds.strand == 1:  # Forward strand
+                        if 0 < cds.location.start - rbs.location.end < 20:
+                            has_rbs = True
+                            break
+                    else:  # Reverse strand
+                        if 0 < rbs.location.start - cds.location.end < 20:
+                            has_rbs = True
+                            break
+                
+                # If no RBS feature, look for RBS sequences in the upstream region
+                if not has_rbs:
+                    if cds.strand == 1:  # Forward strand
+                        upstream_start = max(0, cds.location.start - 20)
+                        upstream_end = cds.location.start
+                        upstream_seq = str(record.seq[upstream_start:upstream_end]).upper()
+                        
+                        for consensus in rbs_consensus:
+                            if consensus in upstream_seq:
+                                has_rbs = True
+                                break
+                    else:  # Reverse strand
+                        upstream_start = cds.location.end
+                        upstream_end = min(len(record.seq), cds.location.end + 20)
+                        upstream_seq = str(record.seq[upstream_start:upstream_end]).upper()
+                        # Need reverse complement for the consensus on reverse strand
+                        from Bio.Seq import Seq
+                        for consensus in rbs_consensus:
+                            rev_consensus = str(Seq(consensus).reverse_complement())
+                            if rev_consensus in upstream_seq:
+                                has_rbs = True
+                                break
+                
+                if not has_rbs:
+                    result["valid"] = False
+                    result["message"] += f"No RBS found upstream of CDS #{i+1}. "
+        
+        return result
+    
+    def _check_restriction_sites(self, record: SeqRecord) -> Dict[str, Any]:
+        """Check for restriction sites that could interfere with cloning"""
+        result = {"valid": True, "message": "", "conflicting_sites": []}
+        
+        # Common restriction enzymes used for cloning
+        common_enzymes = {
+            "EcoRI": "GAATTC",
+            "BamHI": "GGATCC",
+            "HindIII": "AAGCTT",
+            "XhoI": "CTCGAG",
+            "XbaI": "TCTAGA",
+            "PstI": "CTGCAG",
+            "SalI": "GTCGAC",
+            "SmaI": "CCCGGG",
+            "KpnI": "GGTACC",
+            "NdeI": "CATATG",
+            "NotI": "GCGGCCGC",
+            "BglII": "AGATCT"
+        }
+        
+        seq_str = str(record.seq).upper()
+        
+        for enzyme, site in common_enzymes.items():
+            # Count occurrences of the site in the sequence
+            count = seq_str.count(site)
+            
+            if count > 0:
+                result["conflicting_sites"].append({
+                    "enzyme": enzyme,
+                    "site": site,
+                    "count": count,
+                    "positions": [seq_str.find(site, i) for i in range(0, len(seq_str), len(site)) if seq_str.find(site, i) != -1]
+                })
+        
+        # If we found restriction sites that might interfere with cloning
+        if result["conflicting_sites"]:
+            # Still valid but with a warning
+            result["message"] = f"Found {len(result['conflicting_sites'])} restriction sites that might interfere with cloning: "
+            result["message"] += ", ".join([f"{site['enzyme']} ({site['count']})" for site in result["conflicting_sites"]])
+        
+        return result
     
     def _create_mock_sequence(self, sequence_id: str, sequence_type: str) -> SeqRecord:
         """

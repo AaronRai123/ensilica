@@ -3,7 +3,7 @@ import pandas as pd
 import json
 import os
 from dotenv import load_dotenv
-from modules.construct_builder import create_construct
+from modules.construct_builder import create_construct, ConstructBuilder
 from modules.primer_tools import design_primers
 from modules.visualize import visualize_construct
 from modules.gpt_agent import process_natural_language, generate_protocol, analyze_construct
@@ -211,11 +211,19 @@ if st.button("Generate Construct", type="primary"):
             
             with viz_col:
                 # Generate and display visualization
-                viz_image = visualize_construct(
-                    construct_result["construct_record"], 
-                    construct_result["insert_region"]
-                )
-                st.image(f"data:image/svg+xml;base64,{viz_image}", caption="Plasmid Map")
+                with st.spinner("Generating construct visualization..."):
+                    try:
+                        # Pass the insert region to highlight it
+                        image_data = visualize_construct(construct_result['construct_record'], construct_result.get('insert_region'))
+                        
+                        # Use HTML component instead of st.image for better SVG rendering
+                        st.markdown(f"""
+                        <div style="text-align: center; margin: 10px; padding: 10px; background-color: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                            <img src="data:image/svg+xml;base64,{image_data}" style="max-width: 100%; height: auto;" />
+                        </div>
+                        """, unsafe_allow_html=True)
+                    except Exception as e:
+                        st.error(f"Could not generate visualization: {str(e)}")
             
             # Design primers
             with st.spinner("Designing optimal primers..."):
@@ -283,7 +291,8 @@ if st.button("Generate Construct", type="primary"):
                     label="Download GenBank",
                     data=construct_result["genbank_content"],
                     file_name=f"{gene_name}_{vector_name}.gb",
-                    mime="text/plain"
+                    mime="text/plain",
+                    key="download_genbank_main"
                 )
             
             with col2:
@@ -291,7 +300,8 @@ if st.button("Generate Construct", type="primary"):
                     label="Download FASTA",
                     data=construct_result["fasta_content"],
                     file_name=f"{gene_name}_{vector_name}.fasta",
-                    mime="text/plain"
+                    mime="text/plain",
+                    key="download_fasta_main"
                 )
             
             with col3:
@@ -299,7 +309,8 @@ if st.button("Generate Construct", type="primary"):
                     label="Download Protocol",
                     data=protocol,
                     file_name=f"{gene_name}_{vector_name}_protocol.md",
-                    mime="text/plain"
+                    mime="text/plain",
+                    key="download_protocol_main"
                 )
             
             with col4:
@@ -308,11 +319,237 @@ if st.button("Generate Construct", type="primary"):
                     label="Download Primers",
                     data=primer_text,
                     file_name=f"{gene_name}_{vector_name}_primers.txt",
-                    mime="text/plain"
+                    mime="text/plain",
+                    key="download_primers_main"
                 )
                 
             # Add restriction analysis
             add_restriction_analysis(construct_result["construct_record"])
+            
+            # If a construct was generated, show the results
+            if construct_result:
+                # Display basic information about the construct
+                st.markdown(f"## 🧬 Construct: {construct_info['gene_name']}_{construct_info['vector_name']}_{cloning_method.lower().replace(' ', '_')}")
+                st.write(f"Total size: **{len(construct_result['construct_record'].seq)}** bp")
+                
+                # Display tabs for different outputs
+                construct_tabs = st.tabs(["Construct Info", "DNA Sequence", "PCR Primers", "Lab Protocol", "Validation Results"])
+                
+                # Tab 1: Construct Info - show a visual representation
+                with construct_tabs[0]:
+                    st.markdown("### Construct Map")
+                    st.write("Feature map of the created construct:")
+                    
+                    # Show the diagram
+                    with st.spinner("Generating construct visualization..."):
+                        try:
+                            # Pass the insert region to highlight it
+                            image_data = visualize_construct(construct_result['construct_record'], construct_result.get('insert_region'))
+                            
+                            # Use HTML component instead of st.image for better SVG rendering
+                            st.markdown(f"""
+                            <div style="text-align: center; margin: 10px; padding: 10px; background-color: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                                <img src="data:image/svg+xml;base64,{image_data}" style="max-width: 100%; height: auto;" />
+                            </div>
+                            """, unsafe_allow_html=True)
+                        except Exception as e:
+                            st.error(f"Could not generate visualization: {str(e)}")
+                
+                # Tab 2: DNA - show the DNA sequence in different formats
+                with construct_tabs[1]:
+                    sequence_tabs = st.tabs(["FASTA", "GenBank", "Raw Sequence"])
+                    
+                    with sequence_tabs[0]:
+                        st.text(construct_result["fasta_content"])
+                        st.download_button(
+                            "Download FASTA",
+                            construct_result["fasta_content"],
+                            file_name=f"{construct_info['gene_name']}_{construct_info['vector_name']}.fasta",
+                            mime="text/plain",
+                            key="download_fasta_tab"
+                        )
+                        
+                    with sequence_tabs[1]:
+                        st.text(construct_result["genbank_content"])
+                        st.download_button(
+                            "Download GenBank",
+                            construct_result["genbank_content"],
+                            file_name=f"{construct_info['gene_name']}_{construct_info['vector_name']}.gb",
+                            mime="text/plain",
+                            key="download_genbank_tab"
+                        )
+                        
+                    with sequence_tabs[2]:
+                        st.text(str(construct_result['construct_record'].seq))
+                
+                # Tab 3: PCR Primers - show primers for the insert
+                with construct_tabs[2]:
+                    if primer_results and "primers" in primer_results:
+                        st.markdown("### PCR Primers for Gene Amplification")
+                        
+                        for i, primer in enumerate(primer_results["primers"]):
+                            if i < 2:  # Just the main forward and reverse primers
+                                col1, col2, col3, col4 = st.columns([2, 5, 1, 1])
+                                with col1:
+                                    st.markdown(f"**{primer['name']}**")
+                                with col2:
+                                    st.code(primer['sequence'])
+                                with col3:
+                                    st.write(f"Tm: {primer['tm']}°C")
+                                with col4:
+                                    st.write(f"GC: {primer['gc_content']}%")
+                    
+                        if len(primer_results["primers"]) > 2:
+                            with st.expander("Verification Primers"):
+                                for i, primer in enumerate(primer_results["primers"][2:]):
+                                    col1, col2, col3, col4 = st.columns([2, 5, 1, 1])
+                                    with col1:
+                                        st.markdown(f"**{primer['name']}**")
+                                    with col2:
+                                        st.code(primer['sequence'])
+                                    with col3:
+                                        st.write(f"Tm: {primer['tm']}°C")
+                                    with col4:
+                                        st.write(f"GC: {primer['gc_content']}%")
+                    else:
+                        st.info("No primers were generated for this construct.")
+                
+                # Tab 4: Laboratory Protocol - generated based on the construct and cloning method
+                with construct_tabs[3]:
+                    if "protocol" in construct_result:
+                        protocol_text = construct_result["protocol"]
+                        st.markdown(protocol_text)
+                    else:
+                        # Generate a protocol using the NLP model based on the construct information
+                        try:
+                            with st.spinner("Generating laboratory protocol..."):
+                                protocol = generate_protocol(construct_info, construct_result)
+                                st.markdown(protocol)
+                        except Exception as e:
+                            st.error(f"Could not generate protocol: {str(e)}")
+                            st.markdown("""
+                            ## Laboratory Protocol Template
+                            
+                            ### Materials Needed
+                            - Forward and reverse primers
+                            - Template DNA
+                            - PCR reaction mix
+                            - Restriction enzymes (if applicable)
+                            - DNA ligase (if applicable)
+                            - Competent cells
+                            - Selection antibiotic
+                            
+                            ### Procedure
+                            1. Amplify the gene of interest using the primers shown in the PCR Primers tab
+                            2. Verify PCR product by gel electrophoresis
+                            3. Purify the PCR product
+                            4. Prepare vector and insert for the selected cloning method
+                            5. Ligate vector and insert
+                            6. Transform into competent cells
+                            7. Plate on selective media
+                            8. Screen colonies by PCR or restriction digest
+                            9. Sequence verify positive clones
+                            """)
+                
+                # Tab 5: Validation Results - show smart sequence validation results
+                with construct_tabs[4]:
+                    st.markdown("### Smart Sequence Validation Results")
+                    
+                    # Get validation results
+                    try:
+                        # Create a builder instance to access validation methods
+                        builder = ConstructBuilder()
+                        validation_results = builder.smart_sequence_validation(construct_result['construct_record'])
+                        
+                        # Frame shift check
+                        frame_result = validation_results["frame_shift"]
+                        frame_icon = "✅" if frame_result["valid"] else "⚠️"
+                        st.markdown(f"**{frame_icon} Frame Check:**")
+                        if frame_result["valid"]:
+                            st.success("All coding sequences have proper start/stop codons and are in frame.")
+                        else:
+                            st.warning(frame_result["message"])
+                        
+                        # Promoter orientation
+                        promoter_result = validation_results["promoter_orientation"]
+                        promoter_icon = "✅" if promoter_result["valid"] else "⚠️"
+                        st.markdown(f"**{promoter_icon} Promoter Orientation:**")
+                        if promoter_result["valid"]:
+                            st.success("All promoters are correctly oriented relative to their coding sequences.")
+                        else:
+                            st.warning(promoter_result["message"])
+                        
+                        # RBS presence
+                        rbs_result = validation_results["rbs_presence"]
+                        rbs_icon = "✅" if rbs_result["valid"] else "⚠️"
+                        st.markdown(f"**{rbs_icon} Ribosome Binding Sites:**")
+                        if rbs_result["valid"]:
+                            st.success("Ribosome binding sites are present before coding sequences.")
+                        else:
+                            st.warning(rbs_result["message"])
+                        
+                        # Restriction sites
+                        restriction_result = validation_results["restriction_sites"]
+                        
+                        st.markdown("**🔍 Restriction Enzyme Analysis:**")
+                        if not restriction_result["conflicting_sites"]:
+                            st.success("No conflicting restriction sites found.")
+                        else:
+                            st.info(restriction_result["message"])
+                            
+                            # Create a table of conflicting sites
+                            site_data = []
+                            for site in restriction_result["conflicting_sites"]:
+                                site_data.append({
+                                    "Enzyme": site["enzyme"],
+                                    "Recognition Site": site["site"],
+                                    "Occurrences": site["count"],
+                                    "Positions": ", ".join([str(pos) for pos in site["positions"][:3]]) + 
+                                                ("..." if len(site["positions"]) > 3 else "")
+                                })
+                            
+                            st.dataframe(site_data, hide_index=True)
+                            
+                            st.info("**Note:** These restriction sites might interfere with restriction enzyme-based cloning methods. Consider using a different cloning method or different restriction enzymes.")
+                        
+                    except Exception as e:
+                        st.error(f"Could not perform sequence validation: {str(e)}")
+                        st.info("Try regenerating the construct to enable full validation.")
+                    
+                # Output analysis of the construct
+                st.sidebar.markdown("### Construct Analysis")
+                try:
+                    with st.sidebar.status("Analyzing construct...", expanded=False) as status:
+                        st.sidebar.caption("Examining construct properties...")
+                        
+                        # Get analysis from the GPT agent
+                        analysis = analyze_construct(construct_result['construct_record'], construct_info)
+                        
+                        # Update status
+                        status.update(label="Analysis complete!", state="complete", expanded=True)
+                        
+                        # Show analysis
+                        if "potential_issues" in analysis and analysis["potential_issues"]:
+                            st.sidebar.warning("Potential Issues:")
+                            for issue in analysis["potential_issues"]:
+                                st.sidebar.markdown(f"- {issue}")
+                        
+                        if "recommendations" in analysis and analysis["recommendations"]:
+                            st.sidebar.info("Recommendations:")
+                            for rec in analysis["recommendations"]:
+                                st.sidebar.markdown(f"- {rec}")
+                        
+                        if "expression_prediction" in analysis:
+                            st.sidebar.markdown(f"**Expression Prediction:** {analysis['expression_prediction']}")
+                        
+                        if "special_considerations" in analysis and analysis["special_considerations"]:
+                            with st.sidebar.expander("Special Considerations"):
+                                for consideration in analysis["special_considerations"]:
+                                    st.markdown(f"- {consideration}")
+                        
+                except Exception as e:
+                    st.sidebar.error(f"Error analyzing construct: {str(e)}")
+                    st.sidebar.info("Analysis not available. Try regenerating the construct.")
             
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")
