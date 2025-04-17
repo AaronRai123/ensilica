@@ -33,4 +33,3 @@ pydna==4.0.7            # ← do NOT change to 4.1.0 (doesn't exist!)
 # ───────────────────────────
 pytz==2023.3.post1
 typing-extensions==4.8.0
-
