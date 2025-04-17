@@ -23,7 +23,7 @@ altair==5.1.2
 dna_features_viewer==3.1.1
 
 # For sequence manipulation
-pydna==4.1.0
+pydna==4.0.7
 # Updated on Thu Apr 17 04:31:37 EDT 2025
 # Updated on Thu Apr 17 16:08:02 EDT 2025
 # Updated on Thu Apr 17 16:10:25 EDT 2025
