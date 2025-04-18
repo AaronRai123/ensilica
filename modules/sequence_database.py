@@ -11,13 +11,17 @@ from Bio import Entrez, SeqIO
 from Bio.SeqRecord import SeqRecord
 from typing import Optional, Dict, List, Union, Tuple
 from io import StringIO
-
+from Bio.Seq import Seq
+import ssl
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configure Entrez
-Entrez.email = "your_email@example.com"  # Replace with a project email
+Entrez.email = "ensilica.app@gmail.com"  # Updated contact email
+
+# Create a global unverified SSL context for Entrez
+ssl._create_default_https_context = ssl._create_unverified_context
 
 class SequenceRepository:
     """Base class for sequence repositories"""
@@ -32,6 +36,10 @@ class SequenceRepository:
 
 class NCBIRepository(SequenceRepository):
     """Repository for fetching sequences from NCBI"""
+    
+    def __init__(self):
+        # SSL verification is handled globally now
+        pass
     
     def fetch_sequence(self, identifier: str) -> Optional[SeqRecord]:
         """
@@ -60,9 +68,13 @@ class NCBIRepository(SequenceRepository):
             if 'molecule_type' not in record.annotations:
                 record.annotations['molecule_type'] = 'DNA'
                 
+            # Ensure topology is set for circular plasmids
+            if 'topology' not in record.annotations:
+                record.annotations['topology'] = 'circular'
+                
             logger.info(f"Successfully fetched {identifier} from NCBI ({len(record.seq)} bp)")
             return record
-            
+                
         except Exception as e:
             logger.error(f"Failed to fetch {identifier} from NCBI: {str(e)}")
             return None
@@ -298,13 +310,21 @@ class LocalRepository(SequenceRepository):
             logger.warning(f"Data directory not found: {self.data_dir}")
             return index
         
-        # Index all sequence files
+        # Index all sequence files in main directory
         for filename in os.listdir(self.data_dir):
             filepath = os.path.join(self.data_dir, filename)
             if os.path.isfile(filepath) and (filename.endswith(".gb") or filename.endswith(".fasta")):
                 # Extract ID from filename
                 sequence_id = os.path.splitext(filename)[0]
                 index[sequence_id.lower()] = filepath
+        
+        # Also check subdirectories (genes, vectors, parts, etc.)
+        for root, dirs, files in os.walk(self.data_dir):
+            for filename in files:
+                if filename.endswith(".gb") or filename.endswith(".fasta"):
+                    filepath = os.path.join(root, filename)
+                    sequence_id = os.path.splitext(filename)[0]
+                    index[sequence_id.lower()] = filepath
         
         logger.info(f"Indexed {len(index)} local sequence files")
         return index
@@ -443,6 +463,12 @@ class SequenceDatabase:
             "igem": iGEMRepository()
         }
         self.cache = {}
+        
+        # Also create repositories for subdirectories if they exist
+        for subdir in ["vectors", "genes", "parts"]:
+            full_path = os.path.join(data_dir, subdir)
+            if os.path.exists(full_path) and os.path.isdir(full_path):
+                self.repositories[f"local_{subdir}"] = LocalRepository(full_path)
     
     def get_sequence(self, identifier: str, repository: str = None) -> Optional[SeqRecord]:
         """
@@ -476,6 +502,14 @@ class SequenceDatabase:
         if record:
             self.cache[cache_key] = record
             return record
+            
+        # Try subdirectory repositories if they exist
+        for repo_name in self.repositories:
+            if repo_name.startswith("local_") and repo_name != "local":
+                record = self.repositories[repo_name].fetch_sequence(identifier)
+                if record:
+                    self.cache[cache_key] = record
+                    return record
         
         # Try to detect repository from identifier format
         if identifier.startswith("NC_") or identifier.startswith("NM_") or identifier.startswith("XM_"):

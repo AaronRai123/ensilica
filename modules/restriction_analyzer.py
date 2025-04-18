@@ -9,6 +9,7 @@ import pandas as pd
 import io
 import matplotlib.pyplot as plt
 import base64
+import logging
 
 def analyze_restriction_sites(record: SeqRecord, enzymes: List[str] = None) -> Dict[str, Any]:
     """
@@ -22,71 +23,110 @@ def analyze_restriction_sites(record: SeqRecord, enzymes: List[str] = None) -> D
         Dictionary containing analysis results
     """
     # Create a RestrictionBatch with the specified enzymes
-    if enzymes:
-        rb = RestrictionBatch([getattr(Restriction, e) for e in enzymes if hasattr(Restriction, e)])
-    else:
-        # Use common restriction enzymes if none specified
-        common_enzymes = ['EcoRI', 'BamHI', 'HindIII', 'XhoI', 'NdeI', 'XbaI', 
-                         'PstI', 'SalI', 'SmaI', 'KpnI', 'SacI', 'BglII']
-        rb = RestrictionBatch([getattr(Restriction, e) for e in common_enzymes if hasattr(Restriction, e)])
-    
-    # Search for restriction sites
-    result = rb.search(record.seq)
-    
-    # Format the results
-    sites_data = []
-    for enzyme, positions in result.items():
-        for pos in positions:
-            # Get recognition site and cut positions
-            recog_site = enzyme.site
-            fwd_cut = enzyme.fst
-            rev_cut = enzyme.scd
+    try:
+        if enzymes:
+            # Filter out invalid enzymes and provide warning
+            valid_enzymes = []
+            invalid_enzymes = []
+            for e in enzymes:
+                if hasattr(Restriction, e):
+                    valid_enzymes.append(getattr(Restriction, e))
+                else:
+                    invalid_enzymes.append(e)
             
-            # Calculate cut position in the sequence
-            cut_pos = pos + fwd_cut if fwd_cut > 0 else pos + len(recog_site) + fwd_cut
+            if invalid_enzymes:
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Invalid enzyme names ignored: {', '.join(invalid_enzymes)}")
             
-            # Add to results
-            sites_data.append({
-                "enzyme": enzyme.__name__,
-                "position": pos + 1,  # 1-indexed position
-                "recognition_site": recog_site,
-                "cut_position": cut_pos + 1,  # 1-indexed position
-                "overhang": enzyme.ovhg
-            })
-    
-    # Create dataframe for easy analysis
-    sites_df = pd.DataFrame(sites_data)
-    
-    # Sort by position
-    if not sites_df.empty:
-        sites_df = sites_df.sort_values("position")
-    
-    # Analyze for useful restriction sites
-    unique_cutters = []
-    rare_cutters = []
-    
-    if not sites_df.empty:
-        enzyme_counts = sites_df["enzyme"].value_counts()
+            if not valid_enzymes:
+                # No valid enzymes, return empty results
+                return {
+                    "sites": [],
+                    "dataframe": pd.DataFrame(),
+                    "unique_cutters": [],
+                    "rare_cutters": [],
+                    "map_image": None
+                }
+            
+            rb = RestrictionBatch(valid_enzymes)
+        else:
+            # Use common restriction enzymes if none specified
+            common_enzymes = ['EcoRI', 'BamHI', 'HindIII', 'XhoI', 'NdeI', 'XbaI', 
+                             'PstI', 'SalI', 'SmaI', 'KpnI', 'SacI', 'BglII']
+            valid_enzymes = []
+            for e in common_enzymes:
+                if hasattr(Restriction, e):
+                    valid_enzymes.append(getattr(Restriction, e))
+            
+            rb = RestrictionBatch(valid_enzymes)
         
-        # Find unique cutters (cut only once)
-        unique_cutters = enzyme_counts[enzyme_counts == 1].index.tolist()
+        # Search for restriction sites
+        result = rb.search(record.seq)
         
-        # Find rare cutters (cut 2-3 times)
-        rare_cutters = enzyme_counts[(enzyme_counts >= 2) & (enzyme_counts <= 3)].index.tolist()
-    
-    # Generate a restriction map visualization
-    map_image = None
-    if not sites_df.empty:
-        map_image = _generate_restriction_map(record, sites_df)
-    
-    # Return results
-    return {
-        "sites": sites_data,
-        "dataframe": sites_df,
-        "unique_cutters": unique_cutters,
-        "rare_cutters": rare_cutters,
-        "map_image": map_image
-    }
+        # Format the results
+        sites_data = []
+        for enzyme, positions in result.items():
+            for pos in positions:
+                # Get recognition site and cut positions
+                recog_site = enzyme.site
+                fwd_cut = enzyme.fst3
+                rev_cut = enzyme.scd3
+                
+                # Calculate cut position in the sequence
+                cut_pos = pos + fwd_cut if fwd_cut > 0 else pos + len(recog_site) + fwd_cut
+                
+                # Add to results
+                sites_data.append({
+                    "enzyme": enzyme.__name__,
+                    "position": pos + 1,  # 1-indexed position
+                    "recognition_site": recog_site,
+                    "cut_position": cut_pos + 1,  # 1-indexed position
+                    "overhang": enzyme.ovhg
+                })
+        
+        # Create dataframe for easy analysis
+        sites_df = pd.DataFrame(sites_data)
+        
+        # Sort by position
+        if not sites_df.empty:
+            sites_df = sites_df.sort_values("position")
+        
+        # Analyze for useful restriction sites
+        unique_cutters = []
+        rare_cutters = []
+        
+        if not sites_df.empty:
+            enzyme_counts = sites_df["enzyme"].value_counts()
+            
+            # Find unique cutters (cut only once)
+            unique_cutters = enzyme_counts[enzyme_counts == 1].index.tolist()
+            
+            # Find rare cutters (cut 2-3 times)
+            rare_cutters = enzyme_counts[(enzyme_counts >= 2) & (enzyme_counts <= 3)].index.tolist()
+        
+        # Generate a restriction map visualization
+        map_image = None
+        if not sites_df.empty:
+            map_image = _generate_restriction_map(record, sites_df)
+        
+        # Return results
+        return {
+            "sites": sites_data,
+            "dataframe": sites_df,
+            "unique_cutters": unique_cutters,
+            "rare_cutters": rare_cutters,
+            "map_image": map_image
+        }
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error analyzing restriction sites: {e}")
+        return {
+            "sites": [],
+            "dataframe": pd.DataFrame(),
+            "unique_cutters": [],
+            "rare_cutters": [],
+            "map_image": None
+        }
 
 def _generate_restriction_map(record: SeqRecord, sites_df: pd.DataFrame) -> str:
     """
@@ -162,55 +202,69 @@ def get_compatible_enzyme_pairs(record: SeqRecord) -> List[Dict[str, Any]]:
     Returns:
         List of dictionaries with compatible enzyme pairs
     """
-    # Get common restriction enzymes
-    common_enzymes = ['EcoRI', 'BamHI', 'HindIII', 'XhoI', 'NdeI', 'XbaI', 
-                      'PstI', 'SalI', 'SmaI', 'KpnI', 'SacI', 'BglII',
-                      'NotI', 'XmaI', 'SpeI', 'SphI', 'EcoRV', 'NcoI',
-                      'ApaI', 'BstXI', 'ClaI', 'AgeI', 'SacII', 'SnaBI']
-    
-    # Create RestrictionBatch
-    rb = RestrictionBatch([getattr(Restriction, e) for e in common_enzymes if hasattr(Restriction, e)])
-    
-    # Analyze the sequence
-    result = rb.search(record.seq)
-    
-    # Find unique cutters
-    unique_cutters = []
-    for enzyme, positions in result.items():
-        if len(positions) == 1:
-            unique_cutters.append((enzyme, positions[0]))
-    
-    # Find compatible pairs
-    pairs = []
-    for i in range(len(unique_cutters)):
-        for j in range(i+1, len(unique_cutters)):
-            enzyme1, pos1 = unique_cutters[i]
-            enzyme2, pos2 = unique_cutters[j]
+    try:
+        # Get common restriction enzymes
+        common_enzymes = ['EcoRI', 'BamHI', 'HindIII', 'XhoI', 'NdeI', 'XbaI', 
+                          'PstI', 'SalI', 'SmaI', 'KpnI', 'SacI', 'BglII',
+                          'NotI', 'XmaI', 'SpeI', 'SphI', 'EcoRV', 'NcoI',
+                          'ApaI', 'BstXI', 'ClaI', 'AgeI', 'SacII', 'SnaBI']
+        
+        # Create RestrictionBatch with valid enzymes only
+        valid_enzymes = []
+        for e in common_enzymes:
+            if hasattr(Restriction, e):
+                valid_enzymes.append(getattr(Restriction, e))
+        
+        # If no valid enzymes, return empty list
+        if not valid_enzymes:
+            return []
             
-            # Ensure enzymes cut at different positions
-            if pos1 != pos2:
-                # Ensure proper order for fragment isolation
-                if pos1 > pos2:
-                    enzyme1, pos1, enzyme2, pos2 = enzyme2, pos2, enzyme1, pos1
+        rb = RestrictionBatch(valid_enzymes)
+        
+        # Analyze the sequence
+        result = rb.search(record.seq)
+        
+        # Find unique cutters
+        unique_cutters = []
+        for enzyme, positions in result.items():
+            if len(positions) == 1:
+                unique_cutters.append((enzyme, positions[0]))
+        
+        # Find compatible pairs
+        pairs = []
+        for i in range(len(unique_cutters)):
+            for j in range(i+1, len(unique_cutters)):
+                enzyme1, pos1 = unique_cutters[i]
+                enzyme2, pos2 = unique_cutters[j]
                 
-                # Calculate fragment size
-                fragment_size = pos2 - pos1
-                
-                # Check if the fragment is a reasonable size (50bp to 1/2 of sequence)
-                if 50 <= fragment_size <= len(record.seq) // 2:
-                    pairs.append({
-                        "enzyme1": enzyme1.__name__,
-                        "enzyme2": enzyme2.__name__,
-                        "position1": pos1 + 1,  # 1-indexed
-                        "position2": pos2 + 1,  # 1-indexed
-                        "fragment_size": fragment_size,
-                        "compatibility": _check_buffer_compatibility(enzyme1, enzyme2)
-                    })
-    
-    # Sort by compatibility and fragment size
-    pairs.sort(key=lambda x: (-x["compatibility"], x["fragment_size"]))
-    
-    return pairs
+                # Ensure enzymes cut at different positions
+                if pos1 != pos2:
+                    # Ensure proper order for fragment isolation
+                    if pos1 > pos2:
+                        enzyme1, pos1, enzyme2, pos2 = enzyme2, pos2, enzyme1, pos1
+                    
+                    # Calculate fragment size
+                    fragment_size = pos2 - pos1
+                    
+                    # Check if the fragment is a reasonable size (50bp to 1/2 of sequence)
+                    if 50 <= fragment_size <= len(record.seq) // 2:
+                        pairs.append({
+                            "enzyme1": enzyme1.__name__,
+                            "enzyme2": enzyme2.__name__,
+                            "position1": pos1 + 1,  # 1-indexed
+                            "position2": pos2 + 1,  # 1-indexed
+                            "fragment_size": fragment_size,
+                            "compatibility": _check_buffer_compatibility(enzyme1, enzyme2)
+                        })
+        
+        # Sort by compatibility and fragment size
+        pairs.sort(key=lambda x: (-x["compatibility"], x["fragment_size"]))
+        
+        return pairs
+    except Exception as e:
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error finding compatible enzyme pairs: {e}")
+        return []
 
 def _check_buffer_compatibility(enzyme1, enzyme2) -> int:
     """

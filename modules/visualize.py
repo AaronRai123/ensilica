@@ -1,198 +1,70 @@
+"""visualization.py – clean, professional plasmid + linear map renderers
+==================================================================
+* **render_plasmid_map()** – returns base‑64 SVG of a circular map.
+* **visualize_linear_map()** – returns base‑64 PNG of a linear map.
+
+Improvements vs previous version
+--------------------------------
+* Unified, Google‑material colour palette via `FEATURE_COLOURS`.
+* Smart lane algorithm for linear view (unbounded lanes, spills up/down).
+* Text labels auto‑flip for readability (no upside‑down text).
+* Outer tick marks every 1 kb on plasmid (configurable).
+* High‑DPI output (`SVG 120 dpi`, `PNG 300 dpi`).
+* Utilities: `_arc_path`, `_arrow_polygon`, `_text_rotate` for clarity.
+
+Dependencies
+------------
+* `biopython>=1.80`
+* `numpy`, `matplotlib` (linear only)
+
+Usage
+-----
+```python
+svg_b64 = render_plasmid_map(record, highlight_region={"start":500,"end":800})
+png_b64 = visualize_linear_map(record)
+```
 """
-Visualization module for generating plasmid maps
-"""
+from __future__ import annotations
+
 import base64
 import io
 import math
-from typing import Optional, Dict, Any
-from Bio.SeqRecord import SeqRecord
+from typing import Dict, Any, Iterable, List, Tuple
+
 import numpy as np
-import matplotlib.patches
+import matplotlib
+matplotlib.use("Agg")  # headless
+import matplotlib.pyplot as plt
+from Bio.SeqRecord import SeqRecord
+from Bio.SeqFeature import SeqFeature
 
-def render_plasmid_map(record: SeqRecord, highlight_region: Dict[str, Any] = None, width=800, height=800) -> str:
-    """
-    Generates a base64-encoded SVG of a circular plasmid map from a SeqRecord.
-    
-    Args:
-        record: SeqRecord object containing the construct
-        highlight_region: Optional region to highlight
-        width: Width of the SVG
-        height: Height of the SVG
-        
-    Returns:
-        Base64 encoded SVG string
-    """
-    # Basic settings
-    center_x, center_y = width / 2, height / 2
-    radius = 250
-    feature_width = 30
-    sequence_length = len(record.seq)
-    
-    # Color scheme for different feature types
-    colors = {
-        "CDS": "#34A853",         # Green
-        "gene": "#34A853",        # Green
-        "promoter": "#4285F4",    # Blue
-        "terminator": "#EA4335",  # Red
-        "rep_origin": "#9C27B0",  # Purple
-        "misc_feature": "#A142F4", # Light purple
-        "primer_bind": "#FF6D01", # Orange
-        "RBS": "#00C9A7",         # Teal
-        "regulatory": "#4285F4",  # Blue
-        "source": "#EEEEEE",      # Light grey
-        "resistance": "#FF9800",  # Orange
-    }
-    
-    # Start the SVG
-    svg = f"""<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">
-        <!-- Background -->
-        <rect width="{width}" height="{height}" fill="white" />
-        
-        <!-- Base plasmid circle -->
-        <circle cx="{center_x}" cy="{center_y}" r="{radius}" fill="white" stroke="#333333" stroke-width="2"/>
-        
-        <!-- Title and size -->
-        <text x="{center_x}" y="{center_y - radius - 40}" 
-              text-anchor="middle" font-size="24" font-weight="bold" fill="#333333">
-            {record.id}
-        </text>
-        <text x="{center_x}" y="{center_y - radius - 15}" 
-              text-anchor="middle" font-size="16" fill="#666666">
-            {sequence_length} bp
-        </text>
-    """
-    
-    # Add features
-    for i, feature in enumerate(record.features):
-        # Skip source features (span the entire sequence)
-        if feature.type == "source":
-            continue
-            
-        # Get feature coordinates
-        start = int(feature.location.start)
-        end = int(feature.location.end)
-        
-        # Get label from qualifiers
-        label = ""
-        for qualifier in ["label", "gene", "product", "note"]:
-            if hasattr(feature, 'qualifiers') and qualifier in feature.qualifiers:
-                label = feature.qualifiers[qualifier][0]
-                break
-                
-        if not label:
-            label = f"{feature.type}_{i+1}"
-        
-        # Get feature color
-        color = colors.get(feature.type, "#CCCCCC")
-        
-        # Calculate angles
-        start_angle = 2 * math.pi * start / sequence_length
-        end_angle = 2 * math.pi * end / sequence_length
-        
-        # Handle features that cross the origin
-        if end < start:
-            end_angle = 2 * math.pi * (end + sequence_length) / sequence_length
-            
-        large_arc = 1 if end_angle - start_angle > math.pi else 0
-        
-        # Calculate coordinates for the feature
-        outer_radius = radius + 5
-        inner_radius = radius - feature_width
-        
-        # Outer arc coordinates
-        x1 = center_x + outer_radius * math.cos(start_angle)
-        y1 = center_y + outer_radius * math.sin(start_angle)
-        x2 = center_x + outer_radius * math.cos(end_angle)
-        y2 = center_y + outer_radius * math.sin(end_angle)
-        
-        # Inner arc coordinates
-        x3 = center_x + inner_radius * math.cos(end_angle)
-        y3 = center_y + inner_radius * math.sin(end_angle)
-        x4 = center_x + inner_radius * math.cos(start_angle)
-        y4 = center_y + inner_radius * math.sin(start_angle)
-        
-        # Draw the feature
-        svg += f"""
-        <path d="M {x1} {y1}
-                 A {outer_radius} {outer_radius} 0 {large_arc} 1 {x2} {y2}
-                 L {x3} {y3}
-                 A {inner_radius} {inner_radius} 0 {large_arc} 0 {x4} {y4}
-                 Z"
-              fill="{color}" stroke="black" stroke-width="1" opacity="0.8"/>
-        """
-        
-        # Add the label
-        mid_angle = (start_angle + end_angle) / 2
-        label_radius = outer_radius + 20
-        label_x = center_x + label_radius * math.cos(mid_angle)
-        label_y = center_y + label_radius * math.sin(mid_angle)
-        
-        # Adjust text rotation for readability
-        rotation = mid_angle * 180 / math.pi
-        if 90 < rotation < 270:
-            rotation += 180
-            
-        svg += f"""
-        <text x="{label_x}" y="{label_y}" 
-              text-anchor="middle" 
-              transform="rotate({rotation} {label_x} {label_y})"
-              font-size="12" fill="#333333">{label}</text>
-        """
-    
-    # Highlight the insert region if provided
-    if highlight_region and 'start' in highlight_region and 'end' in highlight_region:
-        start = highlight_region['start']
-        end = highlight_region['end']
-        
-        # Calculate angles
-        start_angle = 2 * math.pi * start / sequence_length
-        end_angle = 2 * math.pi * end / sequence_length
-        
-        # Handle regions that cross the origin
-        if end < start:
-            end_angle = 2 * math.pi * (end + sequence_length) / sequence_length
-            
-        large_arc = 1 if end_angle - start_angle > math.pi else 0
-        
-        # Draw a highlight ring
-        highlight_radius = radius + 15
-        x1 = center_x + highlight_radius * math.cos(start_angle)
-        y1 = center_y + highlight_radius * math.sin(start_angle)
-        x2 = center_x + highlight_radius * math.cos(end_angle)
-        y2 = center_y + highlight_radius * math.sin(end_angle)
-        
-        svg += f"""
-        <path d="M {x1} {y1}
-                 A {highlight_radius} {highlight_radius} 0 {large_arc} 1 {x2} {y2}"
-              stroke="#FF5722" stroke-width="5" fill="none" opacity="0.8" stroke-dasharray="10,5"/>
-        """
-        
-        # Add label
-        mid_angle = (start_angle + end_angle) / 2
-        label_x = center_x + (highlight_radius + 20) * math.cos(mid_angle)
-        label_y = center_y + (highlight_radius + 20) * math.sin(mid_angle)
-        
-        # Adjust text rotation for readability
-        rotation = mid_angle * 180 / math.pi
-        if 90 < rotation < 270:
-            rotation += 180
-            
-        svg += f"""
-        <text x="{label_x}" y="{label_y}" 
-              text-anchor="middle" 
-              transform="rotate({rotation} {label_x} {label_y})"
-              font-size="14" font-weight="bold" fill="#FF5722">INSERT</text>
-        """
-    
-    # Close the SVG
-    svg += "</svg>"
-    
-    # Encode to base64
-    return base64.b64encode(svg.encode("utf-8")).decode("utf-8")
+# ---------------------------------------------------------------------------
+# CONFIGURATION
+# ---------------------------------------------------------------------------
+DPI_SVG = 120
+DPI_PNG = 300
+PLASMID_RADIUS = 250
+PLASMID_WIDTH = 30
+TICK_INTERVAL = 1000  # bp
 
-def visualize_construct(record: SeqRecord, highlight_region: Dict[str, Any] = None) -> str:
+FEATURE_COLOURS = {
+    "CDS": "#4285F4", "gene": "#4285F4",
+    "promoter": "#9C27B0", "terminator": "#E91E63",
+    "rep_origin": "#2196F3", "origin": "#2196F3",
+    "misc_feature": "#607D8B", "primer_bind": "#FF5722",
+    "RBS": "#00BCD4", "regulatory": "#9C27B0",
+    "resistance": "#F44336", "marker": "#FF9800",
+}
+DEFAULT_COLOUR = "#BDBDBD"
+FONT_FAMILY = "Arial, Helvetica, sans‑serif"
+
+# ---------------------------------------------------------------------------
+#   PUBLIC API
+# ---------------------------------------------------------------------------
+
+def visualize_construct(record: SeqRecord, highlight_region: Dict[str, Any] | None = None) -> str:
     """
-    Visualize a genetic construct and return the visualization as a base64 encoded SVG
+    Wrapper function for render_plasmid_map for backwards compatibility
     
     Args:
         record: SeqRecord object containing the construct
@@ -201,331 +73,167 @@ def visualize_construct(record: SeqRecord, highlight_region: Dict[str, Any] = No
     Returns:
         Base64 encoded SVG data
     """
-    try:
-        # Try the simplified plasmid visualization with standardized elements
-        return create_standard_plasmid_map(record, highlight_region)
-    except Exception as e:
-        import logging
-        logging.error(f"Visualization error: {str(e)}")
-        # Create a simple fallback visualization
-        return create_fallback_visualization(record)
+    return render_plasmid_map(record, highlight_region)
 
-def create_standard_plasmid_map(record: SeqRecord, highlight_region: Dict[str, Any] = None, width=800, height=800) -> str:
-    """
-    Create a standardized plasmid map visualization similar to the reference image
-    
-    Args:
-        record: SeqRecord object containing the construct
-        highlight_region: Optional region to highlight
-        width: Width of the SVG
-        height: Height of the SVG
-        
-    Returns:
-        Base64 encoded SVG string
-    """
-    # Basic settings
-    center_x, center_y = width / 2, height / 2
-    radius = 250
-    feature_width = 30
-    sequence_length = len(record.seq)
-    
-    # Professional color scheme
-    colors = {
-        "CDS": "#4286f4",          # Blue for CDS/genes
-        "gene": "#4286f4",         # Blue for CDS/genes
-        "promoter": "#9c27b0",     # Purple for promoters 
-        "terminator": "#e91e63",   # Pink for terminators
-        "rep_origin": "#2196f3",   # Light blue for origins
-        "misc_feature": "#607d8b", # Gray for misc features
-        "primer_bind": "#ff5722",  # Red/orange for primer sites
-        "RBS": "#00bcd4",          # Cyan for RBS
-        "regulatory": "#9c27b0",   # Purple for regulatory elements
-        "source": "#eeeeee",       # Light grey for source
-        "resistance": "#f44336",   # Red for resistance genes
-        "marker": "#ff9800",       # Orange for selectable markers
-    }
-    
-    # Start the SVG
-    svg = f"""<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">
-        <!-- Background -->
-        <rect width="{width}" height="{height}" fill="white" />
-        
-        <!-- Base plasmid circle -->
-        <circle cx="{center_x}" cy="{center_y}" r="{radius}" fill="none" stroke="#999999" stroke-width="15"/>
-        
-        <!-- Title -->
-        <text x="{center_x}" y="{center_y}" 
-              text-anchor="middle" dominant-baseline="middle" font-size="40" font-weight="bold" fill="#333333">
-            Plasmid Map
-        </text>
-    """
-    
-    # Categorize features for better labeling
-    resistance_genes = []
-    markers = []
-    promoters = []
-    origins = []
-    inserts = []
-    primers = []
-    restriction_sites = []
-    
-    # Process features and categorize them
-    for i, feature in enumerate(record.features):
-        if feature.type == "source":
+def render_plasmid_map(record: SeqRecord, highlight_region: Dict[str, Any] | None = None,
+                       width: int = 800, height: int = 800) -> str:
+    """Return **base‑64 SVG** circular plasmid map."""
+    seq_len = len(record.seq)
+    cx, cy = width / 2, height / 2
+
+    def _arc_path(rad_out: float, rad_in: float, ang0: float, ang1: float) -> str:
+        # ensure ang1 > ang0
+        if ang1 < ang0:
+            ang1 += 2 * math.pi
+        large = int((ang1 - ang0) > math.pi)
+        # outer arc endpoints
+        x1, y1 = cx + rad_out * math.cos(ang0), cy + rad_out * math.sin(ang0)
+        x2, y2 = cx + rad_out * math.cos(ang1), cy + rad_out * math.sin(ang1)
+        # inner arc endpoints
+        x3, y3 = cx + rad_in * math.cos(ang1), cy + rad_in * math.sin(ang1)
+        x4, y4 = cx + rad_in * math.cos(ang0), cy + rad_in * math.sin(ang0)
+        return (
+            f"M {x1:.2f} {y1:.2f} "
+            f"A {rad_out:.2f} {rad_out:.2f} 0 {large} 1 {x2:.2f} {y2:.2f} "
+            f"L {x3:.2f} {y3:.2f} "
+            f"A {rad_in:.2f} {rad_in:.2f} 0 {large} 0 {x4:.2f} {y4:.2f} Z"
+        )
+
+    def _arrow_polygon(angle: float, size: float = 14) -> str:
+        # draw small triangular arrow centred on path at given angle
+        ax, ay = cx + (PLASMID_RADIUS) * math.cos(angle), cy + (PLASMID_RADIUS) * math.sin(angle)
+        pa = angle + math.pi / 2
+        p1 = (ax + size * math.cos(pa), ay + size * math.sin(pa))
+        p2 = (ax + size * math.cos(angle), ay + size * math.sin(angle))
+        p3 = (ax - size * math.cos(pa), ay - size * math.sin(pa))
+        return " ".join(f"{x:.2f},{y:.2f}" for x, y in (p1, p2, p3))
+
+    def _text_rotate(angle: float) -> float:
+        deg = math.degrees(angle) % 360
+        return deg + 180 if 90 < deg < 270 else deg
+
+    svg_parts: List[str] = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}"'
+        f' style="font-family:{FONT_FAMILY}">',
+        f'<rect width="100%" height="100%" fill="white"/>',
+        # backbone
+        f'<circle cx="{cx}" cy="{cy}" r="{PLASMID_RADIUS}" fill="none" stroke="#666" stroke-width="12"/>'
+    ]
+
+    # ticks every 1 kb
+    for bp in range(0, seq_len, TICK_INTERVAL):
+        ang = 2 * math.pi * bp / seq_len
+        x1, y1 = cx + (PLASMID_RADIUS + 6) * math.cos(ang), cy + (PLASMID_RADIUS + 6) * math.sin(ang)
+        x2, y2 = cx + (PLASMID_RADIUS + 18) * math.cos(ang), cy + (PLASMID_RADIUS + 18) * math.sin(ang)
+        svg_parts.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="#888"/>' )
+        tx, ty = cx + (PLASMID_RADIUS + 28) * math.cos(ang), cy + (PLASMID_RADIUS + 28) * math.sin(ang)
+        svg_parts.append(
+            f'<text x="{tx:.1f}" y="{ty:.1f}" font-size="10" text-anchor="middle"'
+            f' dominant-baseline="middle" transform="rotate({_text_rotate(ang):.1f} {tx:.1f} {ty:.1f})">{bp}</text>'
+        )
+
+    # FEATURE ARCS -----------------------------------------------------------
+    for idx, feat in enumerate(record.features):
+        if feat.type == "source":
             continue
-            
-        # Get feature coordinates
-        start = int(feature.location.start)
-        end = int(feature.location.end)
-        strand = feature.strand
-        
-        # Get feature name from qualifiers
-        feature_name = ""
-        for qualifier in ["label", "gene", "product", "note"]:
-            if hasattr(feature, 'qualifiers') and qualifier in feature.qualifiers:
-                feature_name = feature.qualifiers[qualifier][0]
-                break
-                
-        if not feature_name:
-            feature_name = f"{feature.type}_{i+1}"
-        
-        # Categorize feature
-        if feature.type == "CDS" or feature.type == "gene":
-            if any(term in feature_name.lower() for term in ['resistance', 'ampr', 'kanr', 'cmr', 'tetr', 'bla']):
-                resistance_genes.append((start, end, strand, feature_name, feature.type))
-            elif highlight_region and start <= highlight_region.get("start", -1) <= end:
-                inserts.append((start, end, strand, feature_name, feature.type))
-            elif any(term in feature_name.lower() for term in ['marker', 'gfp', 'rfp', 'yfp', 'cfp']):
-                markers.append((start, end, strand, feature_name, feature.type))
-            else:
-                inserts.append((start, end, strand, feature_name, feature.type))
-        elif feature.type == "promoter":
-            promoters.append((start, end, strand, feature_name, feature.type))
-        elif feature.type == "rep_origin":
-            origins.append((start, end, strand, feature_name, feature.type))
-        elif feature.type == "primer_bind":
-            primers.append((start, end, strand, feature_name, feature.type))
-        elif feature.type == "misc_feature" and "restriction" in feature_name.lower():
-            restriction_sites.append((start, end, strand, feature_name, feature.type))
-    
-    # If insert is not found but highlight region exists, create an insert entry
-    if not inserts and highlight_region:
-        start = highlight_region.get("start", 0)
-        end = highlight_region.get("end", 100)
-        inserts.append((start, end, 1, "Inserted Gene", "gene"))
-    
-    # Add standard features if key elements are missing
-    if not resistance_genes:
-        resistance_genes.append((1500, 2500, 1, "Antibiotic Resistance Gene", "gene"))
-    
-    if not origins:
-        origins.append((3000, 3200, 1, "Origin of Replication", "rep_origin"))
-    
-    if not markers and not inserts:
-        markers.append((500, 1200, 1, "Selectable Marker", "gene"))
-    
-    if not promoters:
-        promoters.append((200, 300, 1, "Promoter", "promoter"))
-    
-    # Draw features - standard arrangement resembling reference image
-    
-    # Origin of Replication at bottom (small feature)
-    for start, end, strand, name, feature_type in origins:
-        svg += draw_feature(center_x, center_y, radius, 15, math.pi * 1.5, math.pi * 1.6, colors["rep_origin"], "Origin of Replication", False)
-    
-    # Antibiotic Resistance at bottom-left
-    for start, end, strand, name, feature_type in resistance_genes:
-        svg += draw_feature(center_x, center_y, radius, 30, math.pi * 0.9, math.pi * 1.3, colors["resistance"], "Antibiotic Resistance Gene", True)
-    
-    # Selectable Marker at top-left
-    for start, end, strand, name, feature_type in markers:
-        svg += draw_feature(center_x, center_y, radius, 30, math.pi * 0.4, math.pi * 0.8, colors["marker"], "Selectable Marker", True)
-    
-    # Promoter at top-right
-    if promoters:
-        svg += draw_feature(center_x, center_y, radius, 30, math.pi * 1.75, math.pi * 1.95, colors["promoter"], "Promoter", True)
-    
-    # Primer sites
-    svg += draw_feature(center_x, center_y, radius, 8, math.pi * 1.96, math.pi * 1.98, "#ff5722", "5' Primer Site", False)
-    svg += draw_feature(center_x, center_y, radius, 8, math.pi * 0.15, math.pi * 0.17, "#ff5722", "3' Primer Site", False)
-    
-    # Restriction sites
-    svg += draw_feature(center_x, center_y, radius, 5, math.pi * 1.99, math.pi * 2.01, "#222222", "Restriction Site", False)
-    svg += draw_feature(center_x, center_y, radius, 5, math.pi * 0.13, math.pi * 0.15, "#222222", "Restriction Site", False)
-    
-    # Inserted Gene at top-right
-    for start, end, strand, name, feature_type in inserts:
-        svg += draw_feature(center_x, center_y, radius, 30, math.pi * 0, math.pi * 0.12, colors["CDS"], "Inserted Gene", True)
-    
-    # Close the SVG
-    svg += "</svg>"
-    
-    # Encode to base64
-    return base64.b64encode(svg.encode("utf-8")).decode("utf-8")
+        start, end = int(feat.location.start), int(feat.location.end)
+        if end == start:
+            continue
+        colour = FEATURE_COLOURS.get(feat.type, DEFAULT_COLOUR)
+        ang0, ang1 = (2 * math.pi * start / seq_len), (2 * math.pi * end / seq_len)
+        path = _arc_path(PLASMID_RADIUS + PLASMID_WIDTH / 2, PLASMID_RADIUS - PLASMID_WIDTH / 2, ang0, ang1)
+        svg_parts.append(f'<path d="{path}" fill="{colour}" opacity="0.85" stroke="#333" stroke-width="0.6"/>')
 
-def draw_feature(cx, cy, radius, width, start_angle, end_angle, color, label, use_arrow=True):
-    """Helper function to draw a feature arc with optional directional arrow"""
-    # Calculate coordinates
-    outer_radius = radius + width/2
-    inner_radius = radius - width/2
-    
-    # Calculate midpoint for label
-    mid_angle = (start_angle + end_angle) / 2
-    label_radius = radius + width/2 + 20  # Position labels outside features
-    
-    # Calculate arc endpoints
-    x1 = cx + outer_radius * math.cos(start_angle)
-    y1 = cy + outer_radius * math.sin(start_angle)
-    x2 = cx + outer_radius * math.cos(end_angle)
-    y2 = cy + outer_radius * math.sin(end_angle)
-    
-    x3 = cx + inner_radius * math.cos(end_angle)
-    y3 = cy + inner_radius * math.sin(end_angle)
-    x4 = cx + inner_radius * math.cos(start_angle)
-    y4 = cy + inner_radius * math.sin(start_angle)
-    
-    # Determine if it's a large arc
-    large_arc = 1 if (end_angle - start_angle) > math.pi else 0
-    
-    # Base feature path
-    path = f"""
-    <path d="M {x1} {y1}
-             A {outer_radius} {outer_radius} 0 {large_arc} 1 {x2} {y2}
-             L {x3} {y3}
-             A {inner_radius} {inner_radius} 0 {large_arc} 0 {x4} {y4}
-             Z"
-          fill="{color}" stroke="#333333" stroke-width="1" />
-    """
-    
-    # Add directional arrow if requested
-    if use_arrow:
-        # Calculate arrow position at ~75% of the feature
-        arrow_angle = start_angle + (end_angle - start_angle) * 0.75
-        
-        # Arrow size relative to feature width
-        arrow_size = width * 0.8
-        
-        # Calculate arrow points
-        ax1 = cx + radius * math.cos(arrow_angle)
-        ay1 = cy + radius * math.sin(arrow_angle)
-        
-        # Arrow direction based on position on circle
-        perp_angle = arrow_angle + math.pi/2  # Perpendicular to radius
-        
-        # Calculate the three points of the arrow
-        px1 = ax1 + arrow_size * math.cos(perp_angle)
-        py1 = ay1 + arrow_size * math.sin(perp_angle)
-        
-        px2 = ax1 + arrow_size * math.cos(arrow_angle)
-        py2 = ay1 + arrow_size * math.sin(arrow_angle)
-        
-        px3 = ax1 - arrow_size * math.cos(perp_angle)
-        py3 = ay1 - arrow_size * math.sin(perp_angle)
-        
-        path += f"""
-        <path d="M {px1} {py1} L {px2} {py2} L {px3} {py3} Z"
-              fill="white" stroke="#333333" stroke-width="1" />
-        """
-    
-    # Calculate position for label
-    lx = cx + label_radius * math.cos(mid_angle)
-    ly = cy + label_radius * math.sin(mid_angle)
-    
-    # Adjust text rotation for readability
-    rotation = (mid_angle * 180 / math.pi) % 360
-    if 90 < rotation < 270:
-        rotation += 180
-    
-    # Add the label
-    path += f"""
-    <text x="{lx}" y="{ly}" 
-          text-anchor="middle" 
-          transform="rotate({rotation} {lx} {ly})"
-          font-family="Arial" font-size="14" fill="#333333" font-weight="bold">{label}</text>
-    """
-    
-    return path
+        # arrow if > 5 % length and strand info
+        length_bp = (end - start) % seq_len
+        if feat.strand and length_bp > seq_len * 0.05:
+            arrow_ang = ang0 + (ang1 - ang0) * (0.7 if feat.strand == 1 else 0.3)
+            svg_parts.append(f'<polygon points="{_arrow_polygon(arrow_ang)}" fill="white" stroke="#333" stroke-width="0.6"/>')
 
-def create_fallback_visualization(record: SeqRecord) -> str:
-    """
-    Create a simple fallback visualization when the main renderer fails
-    
-    Args:
-        record: SeqRecord object
-        
-    Returns:
-        Base64 encoded SVG data
-    """
-    width, height = 500, 500
-    center_x, center_y = width / 2, height / 2
-    radius = 180
-    
-    svg = f"""<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">
-        <rect width="{width}" height="{height}" fill="white" />
-        <circle cx="{center_x}" cy="{center_y}" r="{radius}" fill="none" stroke="#999999" stroke-width="15"/>
-        <text x="{center_x}" y="{center_y}" text-anchor="middle" dominant-baseline="middle" font-size="30" font-weight="bold">Plasmid Map</text>
-        <text x="{center_x}" y="{center_y + 40}" text-anchor="middle" font-size="14">{record.id} ({len(record.seq)} bp)</text>
-    """
-    
-    # Close the SVG
-    svg += "</svg>"
-    
-    # Encode to base64
-    return base64.b64encode(svg.encode("utf-8")).decode("utf-8")
+        # label
+        label = next((feat.qualifiers.get(k, [""])[0] for k in ("label", "gene", "product", "note") if k in feat.qualifiers), feat.type)
+        mid = (ang0 + ang1) / 2 % (2 * math.pi)
+        lx, ly = cx + (PLASMID_RADIUS + PLASMID_WIDTH / 2 + 24) * math.cos(mid), cy + (PLASMID_RADIUS + PLASMID_WIDTH / 2 + 24) * math.sin(mid)
+        svg_parts.append(
+            f'<text x="{lx:.1f}" y="{ly:.1f}" font-size="12" text-anchor="middle" dominant-baseline="middle"'
+            f' transform="rotate({_text_rotate(mid):.1f} {lx:.1f} {ly:.1f})">{label}</text>'
+        )
 
-def add_restriction_sites(ax, record, plasmid_radius, center):
-    """Add restriction sites visualization to the plasmid map"""
-    from Bio.Restriction import RestrictionBatch
-    from Bio.Restriction import CommOnly
-    
-    # Common restriction enzymes used in molecular biology
-    common_enzymes = RestrictionBatch(CommOnly)
-    
-    # Find restriction sites
-    restriction_sites = common_enzymes.search(record.seq)
-    
-    # Add restriction sites as marks on the plasmid
-    for enzyme, sites in restriction_sites.items():
-        if sites:  # Only show enzymes that have restriction sites in the plasmid
-            for site in sites:
-                site_angle = 2 * np.pi * site / len(record.seq)
-                x = center[0] + plasmid_radius * np.cos(site_angle)
-                y = center[1] + plasmid_radius * np.sin(site_angle)
-                
-                # Draw the restriction site marker
-                ax.plot([center[0], x], [center[1], y], 'r-', linewidth=0.5, alpha=0.5)
-                ax.plot(x, y, 'ro', markersize=3, alpha=0.7)
-                
-                # Add label for restriction site
-                label_x = center[0] + (plasmid_radius + 25) * np.cos(site_angle)
-                label_y = center[1] + (plasmid_radius + 25) * np.sin(site_angle)
-                ax.text(label_x, label_y, enzyme.name, fontsize=6, ha='center', va='center', 
-                       rotation=np.degrees(site_angle) if -np.pi/2 <= site_angle <= np.pi/2 else np.degrees(site_angle) + 180)
+    # highlight region -------------------------------------------------------
+    if highlight_region and {"start", "end"}.issubset(highlight_region):
+        hs, he = highlight_region["start"], highlight_region["end"]
+        ang0, ang1 = 2 * math.pi * hs / seq_len, 2 * math.pi * he / seq_len
+        path = _arc_path(PLASMID_RADIUS + PLASMID_WIDTH + 10, PLASMID_RADIUS + PLASMID_WIDTH + 6, ang0, ang1)
+        svg_parts.append(f'<path d="{path}" fill="none" stroke="#FF5722" stroke-dasharray="8,4" stroke-width="6" opacity="0.8"/>')
+        mid = (ang0 + ang1) / 2
+        tx, ty = cx + (PLASMID_RADIUS + PLASMID_WIDTH + 28) * math.cos(mid), cy + (PLASMID_RADIUS + PLASMID_WIDTH + 28) * math.sin(mid)
+        svg_parts.append(
+            f'<text x="{tx:.1f}" y="{ty:.1f}" font-size="14" font-weight="bold" fill="#FF5722" text-anchor="middle"'
+            f' transform="rotate({_text_rotate(mid):.1f} {tx:.1f} {ty:.1f})">INSERT</text>'
+        )
 
-def add_primer_binding_sites(ax, record, primers, plasmid_radius, center):
-    """Add primer binding sites visualization to the plasmid map"""
-    if not primers:
-        return
-    
-    for i, primer in enumerate(primers):
-        # Get primer binding position (example - would need real data)
-        position = primer.get('binding_position', 0)
-        length = primer.get('length', 20)
-        
-        # Calculate angle for the primer binding site
-        start_angle = 2 * np.pi * position / len(record.seq)
-        end_angle = 2 * np.pi * (position + length) / len(record.seq)
-        
-        # Draw arc for primer binding site
-        arc = matplotlib.patches.Arc(center, 2 * (plasmid_radius + 10), 2 * (plasmid_radius + 10),
-                          theta1=np.degrees(start_angle), theta2=np.degrees(end_angle),
-                          linewidth=2.5, color='green', alpha=0.8)
-        ax.add_patch(arc)
-        
-        # Add primer name
-        mid_angle = (start_angle + end_angle) / 2
-        label_x = center[0] + (plasmid_radius + 40) * np.cos(mid_angle)
-        label_y = center[1] + (plasmid_radius + 40) * np.sin(mid_angle)
-        ax.text(label_x, label_y, f"Primer {i+1}: {primer.get('name', '')}", 
-               fontsize=8, ha='center', va='center', color='green',
-               rotation=np.degrees(mid_angle) if -np.pi/2 <= mid_angle <= np.pi/2 else np.degrees(mid_angle) + 180)
+    # title
+    svg_parts.append(f'<text x="{cx}" y="{cy - PLASMID_RADIUS - 40}" text-anchor="middle" font-size="26" font-weight="bold">{record.id}</text>')
+    svg_parts.append(f'<text x="{cx}" y="{cy - PLASMID_RADIUS - 18}" text-anchor="middle" font-size="16" fill="#555">{seq_len} bp</text>')
+
+    svg_parts.append('</svg>')
+    svg = "\n".join(svg_parts)
+    return base64.b64encode(svg.encode()).decode()
+
+# ---------------------------------------------------------------------------
+#   LINEAR MAP (matplotlib)
+# ---------------------------------------------------------------------------
+
+def visualize_linear_map(record: SeqRecord, highlight_region: Dict[str, Any] | None = None) -> str:
+    seq_len = len(record.seq)
+    fig, ax = plt.subplots(figsize=(12, 3), dpi=DPI_PNG)
+    ax.set_ylim(-2, 2)
+    ax.set_xlim(0, seq_len)
+    ax.axis("off")
+    ax.hlines(0, 0, seq_len, colors="#444", linewidth=2)
+
+    # lane allocation
+    lanes: List[Tuple[int, int, float]] = []  # (end, lane_idx, y)
+    lane_height = 0.6
+
+    def _next_lane(s: int) -> float:
+        for idx, (end, lane_idx, y) in enumerate(lanes):
+            if s > end:
+                lanes[idx] = (s, lane_idx, y)
+                return y
+        y = (len(lanes) + 1) * lane_height * (-1 if len(lanes) % 2 else 1)
+        lanes.append((s, len(lanes), y))
+        return y
+
+    for feat in sorted(record.features, key=lambda f: int(f.location.start)):
+        if feat.type == "source":
+            continue
+        s, e = int(feat.location.start), int(feat.location.end)
+        if e == s:
+            continue
+        y = _next_lane(s)
+        colour = FEATURE_COLOURS.get(feat.type, DEFAULT_COLOUR)
+        ax.add_patch(matplotlib.patches.Rectangle((s, y - 0.15), e - s, 0.3, color=colour, alpha=0.85))
+        if feat.strand:
+            head_x = e if feat.strand == 1 else s
+            tri = np.array([[head_x, y], [head_x - 8 * feat.strand, y + 0.15], [head_x - 8 * feat.strand, y - 0.15]])
+            ax.add_patch(matplotlib.patches.Polygon(tri, color=colour, alpha=0.85))
+        label = next((feat.qualifiers.get(k, [""])[0] for k in ("label", "gene", "product", "note") if k in feat.qualifiers), feat.type)
+        ax.text((s + e) / 2, y + 0.22 * (1 if y > 0 else -1), label, ha="center", va="center", fontsize=8, bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.7))
+
+    # highlight region
+    if highlight_region and {"start", "end"}.issubset(highlight_region):
+        hs, he = highlight_region["start"], highlight_region["end"]
+        ax.axvspan(hs, he, color="#FFEB3B", alpha=0.3)
+
+    # ticks every 1 kb
+    for bp in range(0, seq_len + 1, TICK_INTERVAL):
+        ax.vlines(bp, -0.2, 0.2, colors="#666", linewidth=1)
+        ax.text(bp, -0.4, str(bp), ha="center", va="top", fontsize=7)
+
+    ax.set_title(f"Linear Map • {record.id} ({seq_len} bp)", fontsize=12, pad=12)
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=DPI_PNG, bbox_inches="tight", transparent=True)
+    plt.close(fig)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
