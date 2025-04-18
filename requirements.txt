@@ -1,20 +1,20 @@
 # ───────────────────────────
 #  Core framework & helpers
 # ───────────────────────────
-streamlit==1.28.0
+streamlit==1.29.0
 requests==2.31.0
 python-dotenv==1.0.0
 
 # ───────────────────────────
 #  Data / numerics
 # ───────────────────────────
-numpy==1.26.2          # manylinux wheel → works on Py 3.12
-pandas==2.1.4
+numpy==1.26.3          # manylinux wheel → works on Py 3.12
+pandas==2.2.0
 
 # ───────────────────────────
 #  Plotting / visuals
 # ───────────────────────────
-matplotlib==3.8.1
+matplotlib==3.8.2
 pillow==10.1.0
 altair==5.1.2           # used by Streamlit for charts
 
@@ -33,3 +33,5 @@ pydna==4.0.7            # ← do NOT change to 4.1.0 (doesn't exist!)
 # ───────────────────────────
 pytz==2023.3.post1
 typing-extensions==4.8.0
+
+plotly==5.19.0
