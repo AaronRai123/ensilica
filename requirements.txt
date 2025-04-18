@@ -1,37 +1,19 @@
-# ───────────────────────────
-#  Core framework & helpers
-# ───────────────────────────
+# Core dependencies
 streamlit==1.29.0
-requests==2.31.0
+biopython==1.83
 python-dotenv==1.0.0
+requests==2.31.0
 
-# ───────────────────────────
-#  Data / numerics
-# ───────────────────────────
-numpy==1.26.3          # manylinux wheel → works on Py 3.12
+# Data processing
 pandas==2.2.0
+numpy==1.26.3
 
-# ───────────────────────────
-#  Plotting / visuals
-# ───────────────────────────
+# Visualization
+plotly==5.19.0
 matplotlib==3.8.2
 pillow==10.1.0
-altair==5.1.2           # used by Streamlit for charts
 
-# ───────────────────────────
-#  Bio‑tooling
-# ───────────────────────────
-biopython==1.83
-dna-features-viewer==3.1.1
+# Bio-tooling
 primer3-py==2.1.0
-
-#  pydna → **latest stable that supports Py 3.12**
-pydna==4.0.7            # ← do NOT change to 4.1.0 (doesn't exist!)
-
-# ───────────────────────────
-#  Misc compatibility pins
-# ───────────────────────────
-pytz==2023.3.post1
-typing-extensions==4.8.0
-
-plotly==5.19.0
+dna-features-viewer==3.1.1
+pydna==4.0.7
